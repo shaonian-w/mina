@@ -55,6 +55,18 @@ module Network_config = struct
     ; libp2p_secret: string }
   [@@deriving to_yojson]
 
+  type archive_node_config =
+    { name: string
+    ; class_: string [@key "class"]
+    ; id: string
+    ; enable_gossip_flooding: bool
+    ; run_with_user_agent: bool
+    ; run_with_bots: bool
+    ; enable_peer_exchange: bool
+    ; isolated: bool
+    ; libp2p_secret: string }
+  [@@deriving to_yojson]
+
   type terraform_config =
     { k8s_context: string
     ; cluster_name: string
@@ -69,6 +81,7 @@ module Network_config = struct
     ; runtime_config: Yojson.Safe.t
           [@to_yojson fun j -> `String (Yojson.Safe.to_string j)]
     ; block_producer_configs: block_producer_config list
+    ; archive_node_configs: archive_node_config list
     ; snark_worker_replicas: int
     ; snark_worker_fee: string
     ; snark_worker_public_key: string }
@@ -97,6 +110,7 @@ module Network_config = struct
         ; proof_level
         ; txpool_max_size
         ; block_producers
+        ; num_archive_nodes
         ; num_snark_workers
         ; snark_worker_fee
         ; snark_worker_public_key } =
@@ -222,6 +236,17 @@ module Network_config = struct
       ; private_key= keypair.private_key_file
       ; libp2p_secret= "" }
     in
+    let archive_node_config index : archive_node_config =
+      { name= "test-archive-node-" ^ Int.to_string (index + 1)
+      ; class_= "test"
+      ; id= Int.to_string index
+      ; enable_gossip_flooding= false
+      ; run_with_user_agent= false
+      ; run_with_bots= false
+      ; enable_peer_exchange= false
+      ; isolated= false
+      ; libp2p_secret= "" }
+    in
     (* NETWORK CONFIG *)
     { coda_automation_location= cli_inputs.coda_automation_location
     ; keypairs= block_producer_keypairs
@@ -239,6 +264,8 @@ module Network_config = struct
         ; runtime_config= Runtime_config.to_yojson runtime_config
         ; block_producer_configs=
             List.mapi block_producer_keypairs ~f:block_producer_config
+        ; archive_node_configs=
+            List.init num_archive_nodes ~f:archive_node_config
         ; snark_worker_replicas= num_snark_workers
         ; snark_worker_public_key
         ; snark_worker_fee } }
@@ -296,6 +323,7 @@ module Network_manager = struct
     ; constants: Test_config.constants
     ; block_producer_nodes: Kubernetes_network.Node.t list
     ; snark_coordinator_nodes: Kubernetes_network.Node.t list
+    ; archive_nodes: Kubernetes_network.Node.t list
     ; nodes_by_app_id: Kubernetes_network.Node.t String.Map.t
     ; mutable deployed: bool
     ; keypairs: Keypair.t list }
@@ -363,11 +391,22 @@ module Network_manager = struct
     in
     (* we currently only deploy 1 coordinator per deploy (will be configurable later) *)
     let snark_coordinator_nodes = [cons_node "snark-coordinator-1" 3085] in
+    let num_block_producers =
+      List.length network_config.terraform.block_producer_configs
+    in
     let block_producer_nodes =
-      List.init (List.length network_config.terraform.block_producer_configs)
-        ~f:(fun i ->
+      List.init num_block_producers ~f:(fun i ->
           cons_node (Printf.sprintf "test-block-producer-%d" (i + 1)) (i + 3086)
       )
+    in
+    let num_archive_nodes =
+      List.length network_config.terraform.archive_node_configs
+    in
+    let archive_nodes =
+      List.init num_archive_nodes ~f:(fun i ->
+          cons_node
+            (Printf.sprintf "test-archive_node-%d" (i + 1))
+            (i + 3086 + num_block_producers) )
     in
     let nodes_by_app_id =
       let all_nodes = snark_coordinator_nodes @ block_producer_nodes in
@@ -384,6 +423,7 @@ module Network_manager = struct
       ; constants= network_config.constants
       ; block_producer_nodes
       ; snark_coordinator_nodes
+      ; archive_nodes
       ; nodes_by_app_id
       ; deployed= false
       ; keypairs=
@@ -404,7 +444,7 @@ module Network_manager = struct
       ; constants= t.constants
       ; block_producers= t.block_producer_nodes
       ; snark_coordinators= t.snark_coordinator_nodes
-      ; archive_nodes= []
+      ; archive_nodes= t.archive_nodes
       ; nodes_by_app_id= t.nodes_by_app_id
       ; testnet_log_filter= t.testnet_log_filter
       ; keypairs= t.keypairs }
